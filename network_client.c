@@ -121,6 +121,27 @@ read_again:
         return len;
 }
 
+char *inet_ntoa(struct in_addr *in)
+{
+        char *str_ip = NULL;
+        u_int32_t int_ip = 0;
+        
+        str_ip = kmalloc(16 * sizeof(char), GFP_KERNEL);
+
+        if(!str_ip)
+                return NULL;
+        else
+                memset(str_ip, 0, 16);
+
+        int_ip = in->s_addr;
+
+        sprintf(str_ip, "%d.%d.%d.%d", (int_ip) & 0xFF, (int_ip >> 8) & 0xFF,
+                                 (int_ip >> 16) & 0xFF, (int_ip >> 16) & 0xFF);
+        
+        return str_ip;
+}
+
+
 int tcp_client_connect(void)
 {
         struct sockaddr_in saddr;
@@ -128,7 +149,7 @@ int tcp_client_connect(void)
         struct sockaddr_in daddr;
         struct socket *data_socket = NULL;
         */
-        unsigned char destip[5] = {10,129,41,200,'\0'};
+        unsigned char destip[5] = {192,168,5,1,'\0'};
         /*
         char *response = kmalloc(4096, GFP_KERNEL);
         char *reply = kmalloc(4096, GFP_KERNEL);
@@ -154,6 +175,8 @@ int tcp_client_connect(void)
         saddr.sin_port = htons(PORT);
         saddr.sin_addr.s_addr = htonl(create_address(destip));
 
+	pr_info("client ip = %s\n", inet_ntoa(&(saddr.sin_addr)));
+
         ret = conn_socket->ops->connect(conn_socket, (struct sockaddr *)&saddr\
                         , sizeof(saddr), O_RDWR);
         if(ret && (ret != -EINPROGRESS))
@@ -164,7 +187,7 @@ int tcp_client_connect(void)
         }
 
         memset(&reply, 0, len+1);
-        strcat(reply, "HOLA"); 
+        strcat(reply, "HOLA");
         tcp_client_send(conn_socket, reply, strlen(reply), MSG_DONTWAIT);
 
         wait_event_timeout(recv_wait,\

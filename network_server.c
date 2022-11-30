@@ -409,14 +409,14 @@ int tcp_server_accept(void)
                                goto release;
                        }
 
-               } 
+               }
                __set_current_state(TASK_RUNNING);
                remove_wait_queue(&socket->sk->sk_wq->wait, &accept_wait);
 
                pr_info("accept connection\n");
 
-               accept_err = 
-                       socket->ops->accept(socket, accept_socket, O_NONBLOCK);
+               accept_err =
+                       socket->ops->accept(socket, accept_socket, O_NONBLOCK, true);
 
                if(accept_err < 0)
                {
@@ -426,15 +426,14 @@ int tcp_server_accept(void)
                        goto release;
                }
 
-               client = kmalloc(sizeof(struct sockaddr_in), GFP_KERNEL);   
+               client = kmalloc(sizeof(struct sockaddr_in), GFP_KERNEL);
                memset(client, 0, sizeof(struct sockaddr_in));
 
                addr_len = sizeof(struct sockaddr_in);
 
-               accept_err = 
-               accept_socket->ops->getname(accept_socket,\
-                               (struct sockaddr *)client,\
-                               &addr_len, 2);
+               accept_err = accept_socket->ops->getname(accept_socket,\
+						(struct sockaddr *)client,\
+						2);
 
                if(accept_err < 0)
                {
