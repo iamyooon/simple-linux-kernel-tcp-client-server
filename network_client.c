@@ -17,6 +17,15 @@ MODULE_AUTHOR("Aby Sam Ross");
 
 struct socket *conn_socket = NULL;
 
+struct tcp_client_service
+{
+      int running;  
+      struct task_struct *thread;
+};
+
+struct tcp_client_service *tcp_client;
+
+
 u32 create_address(u8 *ip)
 {
         u32 addr = 0;
@@ -207,10 +216,15 @@ err:
         return -1;
 }
 
+struct task_struct *thread;
+
 static int __init network_client_init(void)
 {
         pr_info(" *** mtp | network client init | network_client_init *** \n");
-        tcp_client_connect();
+        tcp_client = kmalloc(sizeof(struct tcp_client_service), GFP_KERNEL);
+        memset(tcp_client, 0, sizeof(struct tcp_client_service));
+        tcp_client->thread = kthread_run((void *)tcp_client_connect, NULL,\
+                                        "client");
         return 0;
 }
 
