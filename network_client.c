@@ -30,6 +30,8 @@ struct tcp_client_service
 
 struct tcp_client_service *tcp_client;
 
+int tcp_client_send_msg(void);
+
 static int net_dev_open(struct inode *inode, struct file *file)
 {
         pr_info("enter,%s\n", __func__);
@@ -62,12 +64,11 @@ static ssize_t net_dev_write(struct file *filp, const char __user *buf, size_t c
 	else
 		kbuf[63] = 0;
 
-	pr_info("strlen(kbuf)=%d,strlen(message)=%d,%d,%d,%s\n"
+	pr_info("strlen(kbuf)=%d,strlen(message)=%d,%d,%d\n"
 		,strlen(kbuf)
 		,strlen(message)
 		,strncmp(kbuf, "run=off",7)
 		,strncmp(kbuf, "run=on",6)
-		,kbuf[4]
 		);
 
 	if (!strncmp(kbuf,"run=off",7)) {
@@ -80,6 +81,7 @@ static ssize_t net_dev_write(struct file *filp, const char __user *buf, size_t c
 			, __func__ ,tcp_client->running);
 	} else if (!strncmp(kbuf,"msg=",4)) {
 		memcpy(message, &kbuf[4], strlen(kbuf)-4);
+		tcp_client_send_msg();
 	} else {
 		pr_info("%s,%s\n", __func__, kbuf);
 	}
@@ -234,7 +236,6 @@ int tcp_client_connect(void)
         struct sockaddr_in saddr;
         unsigned char destip[5] = {192,168,5,1,'\0'};
         char response[LENGTH+1];
-        char reply[LENGTH+1];
         int ret = -1;
 
         DECLARE_WAIT_QUEUE_HEAD(recv_wait);
@@ -264,25 +265,21 @@ int tcp_client_connect(void)
                         "socket. | setup_connection *** \n", ret);
                 goto err;
         }
-
-	while(1) {
-
-		if (!tcp_client->running) {
-			pr_info("!tcp_client->running,stop sending message\n");
-			msleep(SEND_INTERVAL);
-			continue;
-		}
-
-		memset(&reply, 0, LENGTH+1);
-		strcat(reply, message);
-
-		tcp_client_send(conn_socket, reply, strlen(reply), MSG_DONTWAIT);
-
-		msleep(SEND_INTERVAL);
-	}
-
 err:
-        return -1;
+        return ret;
+}
+
+int tcp_client_send_msg(void)
+{
+        char reply[LENGTH+1];
+	struct socket *socket;
+
+	socket = tcp_client->socket;
+
+	memset(&reply, 0, LENGTH+1);
+	strcat(reply, message);
+
+	tcp_client_send(socket, reply, strlen(reply), MSG_DONTWAIT);
 }
 
 struct task_struct *thread;
@@ -301,8 +298,8 @@ static int __init network_client_init(void)
         tcp_client = kmalloc(sizeof(struct tcp_client_service), GFP_KERNEL);
         memset(tcp_client, 0, sizeof(struct tcp_client_service));
 
-        tcp_client->send_thread = kthread_run((void *)tcp_client_connect, NULL,\
-                                        "client_send");
+	tcp_client_connect();
+
         tcp_client->recv_thread = kthread_run((void *)tcp_client_receive, NULL,\
                                         "client_recv");
 
@@ -355,12 +352,10 @@ static void __exit network_client_exit(void)
 
 	struct socket *conn_socket = tcp_client->socket;
 
-        //DECLARE_WAITQUEUE(exit_wait, current);
         DECLARE_WAIT_QUEUE_HEAD(exit_wait);
 
         memset(&reply, 0, LENGTH+1);
         strcat(reply, "ADIOS"); 
-        //tcp_client_send(conn_socket, reply);
         tcp_client_send(conn_socket, reply, strlen(reply), MSG_DONTWAIT);
 
         //while(1)
