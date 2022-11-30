@@ -9,12 +9,16 @@
 #include <asm/uaccess.h>
 #include <linux/socket.h>
 #include <linux/slab.h>
+#include <linux/cdev.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Aby Sam Ross");
 
 #define PORT 2325
 #define SEND_INTERVAL 3000
+#define LENGTH 49
+
+char message[64] = "HOLA";
 
 struct tcp_client_service
 {
@@ -25,6 +29,79 @@ struct tcp_client_service
 };
 
 struct tcp_client_service *tcp_client;
+
+static int net_dev_open(struct inode *inode, struct file *file)
+{
+        pr_info("enter,%s\n", __func__);
+	return 0;
+}
+
+static int net_dev_release(struct inode *inode, struct file *file)
+{
+        pr_info("enter,%s\n", __func__);
+	return 0;
+}
+
+static ssize_t net_dev_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
+{
+        pr_info("enter,%s,count=%d\n", __func__, count);
+	return 0;
+}
+
+static ssize_t net_dev_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
+{
+	char kbuf[64] = {0,};
+
+	pr_info("enter,%s,count=%d\n", kbuf, count);
+
+	if (copy_from_user(kbuf, buf, count))
+		goto error;
+
+	if (count < 64)
+		kbuf[count] = 0;
+	else
+		kbuf[63] = 0;
+
+	pr_info("strlen(kbuf)=%d,strlen(message)=%d,%d,%d,%s\n"
+		,strlen(kbuf)
+		,strlen(message)
+		,strncmp(kbuf, "run=off",7)
+		,strncmp(kbuf, "run=on",6)
+		,kbuf[4]
+		);
+
+	if (!strncmp(kbuf,"run=off",7)) {
+		tcp_client->running = 0;
+		pr_info("%s,tcp_client->running=%d\n"
+			, __func__ ,tcp_client->running);
+	} else if (!strncmp(kbuf,"run=on",6)) {
+		tcp_client->running = 1;
+		pr_info("%s,tcp_client->running=%d\n"
+			, __func__ ,tcp_client->running);
+	} else if (!strncmp(kbuf,"msg=",4)) {
+		memcpy(message, &kbuf[4], strlen(kbuf)-4);
+	} else {
+		pr_info("%s,%s\n", __func__, kbuf);
+	}
+
+error:
+	pr_info("exit,%s,count=%d\n", kbuf, count);
+	return count;
+}
+
+static long net_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+        pr_info("enter,%s\n", __func__);
+	return 0;
+}
+
+struct file_operations net_dev_fops = {
+	.open = net_dev_open,
+	.release = net_dev_release,
+	.read = net_dev_read,
+	.write = net_dev_write,
+	.unlocked_ioctl = net_dev_ioctl,
+};
 
 
 u32 create_address(u8 *ip)
@@ -91,8 +168,8 @@ repeat_send:
 int tcp_client_receive(struct socket *sock, char *str,\
                         unsigned long flags)
 {
-        int len = 49;
-        char buf[len+1];
+	int len;
+        char buf[LENGTH+1];
 
         struct msghdr msg;
         struct kvec vec;
@@ -111,11 +188,11 @@ int tcp_client_receive(struct socket *sock, char *str,\
 read_again:
 		if (!tcp_client->socket) {
 			pr_info("tcp_client->socket is not init yet\n");
-			msleep(1000);
+			msleep(SEND_INTERVAL);
 			goto read_again;
 		}
 
-		memset(&buf, 0, len+1);
+		memset(&buf, 0, LENGTH+1);
 
 		len = kernel_recvmsg(tcp_client->socket, &msg, &vec, max_size, max_size, 0);
 		if (len == -EAGAIN || len == -ERESTARTSYS)
@@ -146,7 +223,7 @@ char *inet_ntoa(struct in_addr *in)
 
         sprintf(str_ip, "%d.%d.%d.%d", (int_ip) & 0xFF, (int_ip >> 8) & 0xFF,
                                  (int_ip >> 16) & 0xFF, (int_ip >> 16) & 0xFF);
-        
+
         return str_ip;
 }
 
@@ -155,23 +232,13 @@ int tcp_client_connect(void)
 {
 	struct socket *conn_socket;
         struct sockaddr_in saddr;
-        /*
-        struct sockaddr_in daddr;
-        struct socket *data_socket = NULL;
-        */
         unsigned char destip[5] = {192,168,5,1,'\0'};
-        /*
-        char *response = kmalloc(4096, GFP_KERNEL);
-        char *reply = kmalloc(4096, GFP_KERNEL);
-        */
-        int len = 49;
-        char response[len+1];
-        char reply[len+1];
+        char response[LENGTH+1];
+        char reply[LENGTH+1];
         int ret = -1;
 
-        //DECLARE_WAITQUEUE(recv_wait, current);
         DECLARE_WAIT_QUEUE_HEAD(recv_wait);
-        
+
         ret = sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, &conn_socket);
         if(ret < 0)
         {
@@ -199,12 +266,20 @@ int tcp_client_connect(void)
         }
 
 	while(1) {
-		memset(&reply, 0, len+1);
-		strcat(reply, "HOLA");
+
+		if (!tcp_client->running) {
+			pr_info("!tcp_client->running,stop sending message\n");
+			msleep(SEND_INTERVAL);
+			continue;
+		}
+
+		memset(&reply, 0, LENGTH+1);
+		strcat(reply, message);
+
 		tcp_client_send(conn_socket, reply, strlen(reply), MSG_DONTWAIT);
+
 		msleep(SEND_INTERVAL);
 	}
-
 
 err:
         return -1;
@@ -214,28 +289,76 @@ struct task_struct *thread;
 
 static int __init network_client_init(void)
 {
-        pr_info(" *** mtp | network client init | network_client_init *** \n");
+	static struct cdev net_cdev;
+	struct class *net_class = NULL;
+	struct device *dev;
+	static unsigned int major;
+	int ret = 0;
+	dev_t cdev;
+
+        pr_info("enter,%s\n", __func__);
+
         tcp_client = kmalloc(sizeof(struct tcp_client_service), GFP_KERNEL);
         memset(tcp_client, 0, sizeof(struct tcp_client_service));
+
         tcp_client->send_thread = kthread_run((void *)tcp_client_connect, NULL,\
                                         "client_send");
         tcp_client->recv_thread = kthread_run((void *)tcp_client_receive, NULL,\
                                         "client_recv");
-        return 0;
+
+	ret = alloc_chrdev_region(&cdev, 0, 8, "network_client");
+	if (ret) {
+		pr_info("alloc_chrdev_region() return error  = %d\n", ret);
+		goto err1;
+	}
+	major = MAJOR(cdev);
+	cdev_init(&net_cdev, &net_dev_fops);
+	net_cdev.owner = THIS_MODULE;
+
+	// add a char device to the system
+	ret = cdev_add(&net_cdev, MKDEV(major, 0), 8);
+	if (ret) {
+		pr_info("cdev_add() return error = %d\n", ret);
+		goto err2;
+	}
+
+	net_class = class_create(THIS_MODULE, "network_client");
+	if (IS_ERR(net_class)) {
+		pr_info("class_create() return error = %d\n", net_class);
+		ret = net_class;
+		goto err3;
+	}
+
+	dev = device_create(net_class, NULL, cdev,
+			NULL, "network_client", 0);
+	if (IS_ERR(dev)) {
+		pr_info("device_create() return error = %d\n", ret);
+		goto err4;
+	}
+
+        pr_info("exit,ret=%d\n",0);
+	return 0;
+err4:
+	class_destroy(net_class);
+err3:
+	cdev_del(&net_cdev);
+err2:
+	unregister_chrdev_region(cdev, 8);
+err1:
+	return ret;
 }
 
 static void __exit network_client_exit(void)
 {
-        int len = 49;
-        char response[len+1];
-        char reply[len+1];
+        char response[LENGTH+1];
+        char reply[LENGTH+1];
 
 	struct socket *conn_socket = tcp_client->socket;
 
         //DECLARE_WAITQUEUE(exit_wait, current);
         DECLARE_WAIT_QUEUE_HEAD(exit_wait);
 
-        memset(&reply, 0, len+1);
+        memset(&reply, 0, LENGTH+1);
         strcat(reply, "ADIOS"); 
         //tcp_client_send(conn_socket, reply);
         tcp_client_send(conn_socket, reply, strlen(reply), MSG_DONTWAIT);
@@ -251,7 +374,7 @@ static void __exit network_client_exit(void)
                                                                         5*HZ);
         if(!skb_queue_empty(&conn_socket->sk->sk_receive_queue))
         {
-                memset(&response, 0, len+1);
+                memset(&response, 0, LENGTH+1);
                 tcp_client_receive(conn_socket, response, MSG_DONTWAIT);
                 //remove_wait_queue(&conn_socket->sk->sk_wq->wait, &exit_wait);
         }
