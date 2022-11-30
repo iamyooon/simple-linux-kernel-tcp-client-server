@@ -186,35 +186,22 @@ int tcp_client_connect(void)
                 goto err;
         }
 
-        memset(&reply, 0, len+1);
-        strcat(reply, "HOLA");
-        tcp_client_send(conn_socket, reply, strlen(reply), MSG_DONTWAIT);
+	while(1) {
+		memset(&reply, 0, len+1);
+		strcat(reply, "HOLA");
+		tcp_client_send(conn_socket, reply, strlen(reply), MSG_DONTWAIT);
 
-        wait_event_timeout(recv_wait,\
-                        !skb_queue_empty(&conn_socket->sk->sk_receive_queue),\
-                                                                        5*HZ);
-        /*
-        add_wait_queue(&conn_socket->sk->sk_wq->wait, &recv_wait);
-        while(1)
-        {
-                __set_current_status(TASK_INTERRUPTIBLE);
-                schedule_timeout(HZ);
-        */
-                if(!skb_queue_empty(&conn_socket->sk->sk_receive_queue))
-                {
-                        /*
-                        __set_current_status(TASK_RUNNING);
-                        remove_wait_queue(&conn_socket->sk->sk_wq->wait,\
-                                                              &recv_wait);
-                        */
-                        memset(&response, 0, len+1);
-                        tcp_client_receive(conn_socket, response, MSG_DONTWAIT);
-                        //break;
-                }
+		wait_event_timeout(recv_wait,\
+				!skb_queue_empty(&conn_socket->sk->sk_receive_queue),\
+										5*HZ);
+		if(!skb_queue_empty(&conn_socket->sk->sk_receive_queue))
+		{
+			memset(&response, 0, len+1);
+			tcp_client_receive(conn_socket, response, MSG_DONTWAIT);
+		}
+		msleep(1000);
+	}
 
-        /*
-        }
-        */
 
 err:
         return -1;
