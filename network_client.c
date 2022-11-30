@@ -14,13 +14,14 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Aby Sam Ross");
 
 #define PORT 2325
-
-struct socket *conn_socket = NULL;
+#define SEND_INTERVAL 3000
 
 struct tcp_client_service
 {
-      int running;  
-      struct task_struct *thread;
+      int running;
+      struct socket *socket;
+      struct task_struct *send_thread;
+      struct task_struct *recv_thread;
 };
 
 struct tcp_client_service *tcp_client;
@@ -82,51 +83,50 @@ repeat_send:
                         goto repeat_send;
         }
         set_fs(oldmm);
+
+	pr_info("sending message : %s\n", buf);
         return written ? written:len;
 }
 
 int tcp_client_receive(struct socket *sock, char *str,\
                         unsigned long flags)
 {
-        //mm_segment_t oldmm;
+        int len = 49;
+        char buf[len+1];
+
         struct msghdr msg;
-        //struct iovec iov;
         struct kvec vec;
-        int len;
         int max_size = 50;
 
         msg.msg_name    = 0;
         msg.msg_namelen = 0;
-        /*
-        msg.msg_iov     = &iov;
-        msg.msg_iovlen  = 1;
-        */
         msg.msg_control = NULL;
         msg.msg_controllen = 0;
-        msg.msg_flags   = flags;
-        /*
-        msg.msg_iov->iov_base   = str;
-        msg.msg_ioc->iov_len    = max_size; 
-        */
+        msg.msg_flags   = 0;
+
         vec.iov_len = max_size;
-        vec.iov_base = str;
+        vec.iov_base = buf;
 
-        //oldmm = get_fs(); set_fs(KERNEL_DS);
+	while(1) {
 read_again:
-        //len = sock_recvmsg(sock, &msg, max_size, 0); 
-        len = kernel_recvmsg(sock, &msg, &vec, max_size, max_size, flags);
+		if (!tcp_client->socket) {
+			pr_info("tcp_client->socket is not init yet\n");
+			msleep(1000);
+			goto read_again;
+		}
 
-        if(len == -EAGAIN || len == -ERESTARTSYS)
-        {
-                pr_info(" *** mtp | error while reading: %d | "
-                        "tcp_client_receive *** \n", len);
+		memset(&buf, 0, len+1);
 
-                goto read_again;
-        }
+		len = kernel_recvmsg(tcp_client->socket, &msg, &vec, max_size, max_size, 0);
+		if (len == -EAGAIN || len == -ERESTARTSYS)
+		{
+			pr_info(" *** mtp | error while reading: %d | "
+				"tcp_client_receive *** \n", len);
+			goto read_again;
+		}
+		pr_info("the server says: %s\n", buf);
+	}
 
-
-        pr_info(" *** mtp | the server says: %s | tcp_client_receive *** \n", str);
-        //set_fs(oldmm);
         return len;
 }
 
@@ -153,6 +153,7 @@ char *inet_ntoa(struct in_addr *in)
 
 int tcp_client_connect(void)
 {
+	struct socket *conn_socket;
         struct sockaddr_in saddr;
         /*
         struct sockaddr_in daddr;
@@ -179,6 +180,8 @@ int tcp_client_connect(void)
                 goto err;
         }
 
+	tcp_client->socket = conn_socket;
+
         memset(&saddr, 0, sizeof(saddr));
         saddr.sin_family = AF_INET;
         saddr.sin_port = htons(PORT);
@@ -199,16 +202,7 @@ int tcp_client_connect(void)
 		memset(&reply, 0, len+1);
 		strcat(reply, "HOLA");
 		tcp_client_send(conn_socket, reply, strlen(reply), MSG_DONTWAIT);
-
-		wait_event_timeout(recv_wait,\
-				!skb_queue_empty(&conn_socket->sk->sk_receive_queue),\
-										5*HZ);
-		if(!skb_queue_empty(&conn_socket->sk->sk_receive_queue))
-		{
-			memset(&response, 0, len+1);
-			tcp_client_receive(conn_socket, response, MSG_DONTWAIT);
-		}
-		msleep(1000);
+		msleep(SEND_INTERVAL);
 	}
 
 
@@ -223,8 +217,10 @@ static int __init network_client_init(void)
         pr_info(" *** mtp | network client init | network_client_init *** \n");
         tcp_client = kmalloc(sizeof(struct tcp_client_service), GFP_KERNEL);
         memset(tcp_client, 0, sizeof(struct tcp_client_service));
-        tcp_client->thread = kthread_run((void *)tcp_client_connect, NULL,\
-                                        "client");
+        tcp_client->send_thread = kthread_run((void *)tcp_client_connect, NULL,\
+                                        "client_send");
+        tcp_client->recv_thread = kthread_run((void *)tcp_client_receive, NULL,\
+                                        "client_recv");
         return 0;
 }
 
@@ -233,6 +229,8 @@ static void __exit network_client_exit(void)
         int len = 49;
         char response[len+1];
         char reply[len+1];
+
+	struct socket *conn_socket = tcp_client->socket;
 
         //DECLARE_WAITQUEUE(exit_wait, current);
         DECLARE_WAIT_QUEUE_HEAD(exit_wait);
